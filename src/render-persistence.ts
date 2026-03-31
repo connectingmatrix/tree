@@ -6,7 +6,7 @@ export interface TreeRenderState {
     selectedByContext: Record<string, TreeSelection>;
 }
 
-export const TREE_RENDER_STATE_STORAGE_KEY = 'giga_tree_render_state_v2';
+export const TREE_RENDER_STATE_STORAGE_KEY = 'giga_tree_render_state_v3';
 
 export const createTreeRenderState = (): TreeRenderState => ({
     activeContextKey: 'user',

@@ -207,3 +207,32 @@ export interface TreeSelection {
     subjectId?: string;
     pathIds?: string[];
 }
+
+export interface TreeOrganizationRecord {
+    id: string;
+    name: string;
+}
+
+export type TreeRootKind = 'user-root' | 'organization-root' | 'global-root';
+
+export interface TreeRootDefinition {
+    kind: TreeRootKind;
+    icon?: string;
+    label?: string;
+}
+
+export interface TreeLoadState {
+    loadedContextKeys: Record<string, boolean>;
+    loadingContextKeys: Record<string, boolean>;
+    errorByContext: Record<string, string>;
+    organizations: TreeOrganizationRecord[];
+    isOrganizationsLoading: boolean;
+    organizationError: string | null;
+}
+
+export interface ReconcileContextInput {
+    contextKey: string;
+    matches: (roots: TreeNode[]) => boolean;
+    maxAttempts?: number;
+    baseDelayMs?: number;
+}
