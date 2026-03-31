@@ -8,6 +8,22 @@ export const treeContextKeyForScope = (scope: TreeScope): string => (scope === '
 
 export const treeContextTypeForScope = (scope: TreeScope): TreeContextType => (scope === 'g' ? 'global' : 'user');
 
+export const resolveTreeContextTypeFromKey = (contextKey: string): TreeContextType => {
+    if (contextKey.startsWith('organization:')) {
+        return 'organization';
+    }
+
+    return contextKey === 'global' ? 'global' : 'user';
+};
+
+export const resolveOrganizationIdFromContextKey = (contextKey: string): string | null => {
+    if (!contextKey.startsWith('organization:')) {
+        return null;
+    }
+
+    return contextKey.replace(/^organization:/, '').trim() || null;
+};
+
 export const resolveRouteOrganizationId = (pathname: string): string | null => {
     const matched = pathname.match(/^\/org\/([^/]+)/);
     if (!matched?.[1]) {

@@ -172,6 +172,7 @@ export interface BuildTreeNodeModelOptions {
     treeContextKey: string;
     organizationId?: string | null;
     loadingNodeIds?: Set<string>;
+    canLazyLoadChildren?: (node: TreeNode) => boolean;
     resolveTreePath?: (path: string) => string;
     toChatUrl?: (node: TreeNode) => string;
     toPostChatUrl?: (node: TreeNode, post: TreePostRecord) => string;
@@ -192,5 +193,17 @@ export interface TreeNodeModel {
     treeContextType?: TreeContextType;
     treeContextKey?: string;
     subjectId?: string;
+    pathIds?: string[];
+    canLazyLoadChildren?: boolean;
     items?: TreeNodeModel[];
+}
+
+export interface TreeSelection {
+    id: string;
+    nodeType: TreeNodeModel['nodeType'];
+    treeContextKey: string;
+    scope?: TreeScope;
+    organizationId?: string | null;
+    subjectId?: string;
+    pathIds?: string[];
 }

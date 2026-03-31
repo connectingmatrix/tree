@@ -12,3 +12,7 @@ export * from './controller';
 export * from './model';
 export * from './navigation';
 export * from './creation';
+export * from './render-persistence';
+export * from './state';
+export * from './sidebar';
+export * from './selection';
