@@ -1,117 +1,76 @@
-import { buildNodeUrl, buildPathKeyFromSegments, toSlug } from './path';
-import { NormalizeTreeNodesInput, RawTreeNode, TreeIndex, TreeNode, TreeNodeType, TreePathSegment, TreeScope } from './types';
+import { TreeIndex, TreeNodeRecord } from "./types";
 
-export const toTreeNodeType = (type: RawTreeNode['nodeType']): TreeNodeType => {
-    if (type === 'CHANNEL') {
-        return 'channel';
-    }
+export const readTreeNodeKey = (contextKey: string, nodeId: string): string =>
+  `${contextKey}:${nodeId}`;
 
-    if (type === 'CATEGORY') {
-        return 'category';
-    }
+const readNode = <T extends TreeNodeRecord>(
+  node: T,
+  parentId: string | null,
+  pathIds: string[],
+  depth: number
+): T => {
+  const children = node.children.map((child) =>
+    readNode(child as T, node.id, [...pathIds, node.id], depth + 1)
+  );
+  const state = {
+    load: node.state.load || "loading-done",
+    expand: node.state.expand || (children.length ? "collapsed" : "expanded"),
+  };
+  const contextState = {
+    ...node.contextState,
+    visible: node.contextState.visible === false ? false : true,
+  };
 
-    return 'subject';
+  return {
+    ...node,
+    parentId,
+    depth,
+    pathIds: [...pathIds, node.id],
+    children,
+    childCount:
+      typeof node.childCount === "number" ? node.childCount : children.length,
+    properties: node.properties || {},
+    state,
+    contextState,
+    editable: node.editable !== false,
+    locked: node.locked === true,
+    visible: node.visible !== false,
+    showCheckbox: node.showCheckbox === true,
+  };
 };
 
-export const scopedIdKey = (scope: TreeScope, id: string): string => `${scope}:${id}`;
+export const normalizeTreeNodes = <T extends TreeNodeRecord>(nodes: T[]): T[] =>
+  nodes.map((node) => readNode(node, null, [], 0));
 
-export const scopedPathKey = (scope: TreeScope, pathKey: string): string => `${scope}:${pathKey}`;
-
-const buildTreeNodesRecursive = (args: {
-    scope: TreeScope;
-    rawNodes: RawTreeNode[];
-    parentId: string | null;
-    parentSegments: TreePathSegment[];
-    depth: number;
-}): TreeNode[] => {
-    const usedSiblingSlugs = new Set<string>();
-
-    return (args.rawNodes || []).map((rawNode) => {
-        const nodeType = toTreeNodeType(rawNode.nodeType);
-        const baseSlug = rawNode.slug ? toSlug(rawNode.slug) : toSlug(rawNode.name || rawNode.id);
-        let slug = baseSlug;
-        let duplicateCount = 2;
-
-        while (usedSiblingSlugs.has(slug)) {
-            slug = `${baseSlug}-${duplicateCount}`;
-            duplicateCount += 1;
-        }
-
-        usedSiblingSlugs.add(slug);
-
-        const segment: TreePathSegment = {
-            type: nodeType,
-            slug,
-            id: rawNode.id,
-            label: rawNode.name || rawNode.slug || rawNode.id
-        };
-
-        const pathSegments = [...args.parentSegments, segment];
-        const node: TreeNode = {
-            id: rawNode.id,
-            scope: args.scope,
-            nodeType,
-            name: rawNode.name || rawNode.slug || rawNode.id,
-            slug,
-            description: rawNode.description || '',
-            url: buildNodeUrl(args.scope, pathSegments),
-            parentId: args.parentId,
-            depth: args.depth,
-            pathSegments,
-            children: [],
-            posts: rawNode.posts || []
-        };
-
-        node.children = buildTreeNodesRecursive({
-            scope: args.scope,
-            rawNodes: rawNode.children || [],
-            parentId: node.id,
-            parentSegments: pathSegments,
-            depth: args.depth + 1
-        });
-
-        return node;
-    });
-};
-
-export const normalizeTreeNodes = (input: NormalizeTreeNodesInput): TreeNode[] => {
-    return buildTreeNodesRecursive({
-        scope: input.scope,
-        rawNodes: input.rawNodes || [],
-        parentId: null,
-        parentSegments: [],
-        depth: 0
-    });
-};
-
-export const createEmptyTreeIndex = (): TreeIndex => ({
-    rootsByScope: {
-        u: [],
-        g: []
-    },
-    nodeByScopedId: new Map<string, TreeNode>(),
-    nodeByScopedPath: new Map<string, TreeNode>(),
-    subjectNodeByScopedId: new Map<string, TreeNode>()
+export const createEmptyTreeIndex = <
+  T extends TreeNodeRecord
+>(): TreeIndex<T> => ({
+  rootsByContext: {},
+  nodeByContextId: new Map<string, T>(),
+  nodeById: new Map<string, T>(),
+  childrenByParentId: new Map<string, T[]>(),
 });
 
-const indexTreeNode = (index: TreeIndex, node: TreeNode): void => {
-    index.nodeByScopedId.set(scopedIdKey(node.scope, node.id), node);
-    index.nodeByScopedPath.set(scopedPathKey(node.scope, buildPathKeyFromSegments(node.pathSegments)), node);
-
-    if (node.nodeType === 'subject') {
-        index.subjectNodeByScopedId.set(scopedIdKey(node.scope, node.id), node);
-    }
-
-    node.children.forEach((child) => indexTreeNode(index, child));
+const writeIndex = <T extends TreeNodeRecord>(
+  index: TreeIndex<T>,
+  contextKey: string,
+  node: T
+): void => {
+  index.nodeByContextId.set(readTreeNodeKey(contextKey, node.id), node);
+  index.nodeById.set(node.id, node);
+  const parentKey = node.parentId || "";
+  const children = index.childrenByParentId.get(parentKey) || [];
+  index.childrenByParentId.set(parentKey, [...children, node]);
+  node.children.forEach((child) => writeIndex(index, contextKey, child as T));
 };
 
-export const buildTreeIndex = (rootsByScope: Record<TreeScope, TreeNode[]>): TreeIndex => {
-    const index = createEmptyTreeIndex();
-    index.rootsByScope.u = rootsByScope.u || [];
-    index.rootsByScope.g = rootsByScope.g || [];
-
-    index.rootsByScope.u.forEach((node) => indexTreeNode(index, node));
-    index.rootsByScope.g.forEach((node) => indexTreeNode(index, node));
-
-    return index;
+export const buildTreeIndex = <T extends TreeNodeRecord>(
+  rootsByContext: Record<string, T[]>
+): TreeIndex<T> => {
+  const index = createEmptyTreeIndex<T>();
+  index.rootsByContext = rootsByContext;
+  Object.entries(rootsByContext).forEach(([contextKey, roots]) =>
+    roots.forEach((node) => writeIndex(index, contextKey, node))
+  );
+  return index;
 };

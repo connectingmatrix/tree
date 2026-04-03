@@ -1,55 +1,124 @@
-import { BuildTreeNodeModelOptions, TreeNode, TreeNodeModel } from './types';
+import {
+  BuildTreeNodeModelOptions,
+  TreeNodeModel,
+  TreeNodeRecord,
+} from "./types";
 
-const readPathIds = (node: TreeNode): string[] => node.pathSegments.map((segment) => segment.id);
-const resolveIcon = (nodeType: TreeNode['nodeType']): string => {
-    if (nodeType === 'channel') return 'pi pi-fw pi-sitemap';
-    if (nodeType === 'category') return 'pi pi-fw pi-folder';
-    return 'pi pi-fw pi-folder-open';
+const matchesNode = <T extends TreeNodeRecord>(
+  node: T,
+  query: string,
+  readMatch?: (node: T, query: string) => boolean
+): boolean => {
+  if (!query) return true;
+  if (readMatch) return readMatch(node, query);
+  return (
+    `${node.label} ${JSON.stringify(node.properties || {})}`
+      .toLowerCase()
+      .indexOf(query) >= 0
+  );
 };
 
-export const buildTreeNodeModels = (nodes: TreeNode[], options: BuildTreeNodeModelOptions, parent?: TreeNode): TreeNodeModel[] => {
-    const resolveTreePath = options.resolveTreePath || ((path: string) => path);
-    const loadingNodeIds = options.loadingNodeIds || new Set<string>();
-
-    return nodes.slice().sort((a, b) => a.name.localeCompare(b.name)).map((node) => {
-        const pathIds = readPathIds(node);
-        const children = buildTreeNodeModels(node.children, options, node);
-        const posts = node.nodeType === 'subject'
-            ? node.posts.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map((post) => ({
-                  id: post.id,
-                  label: post.title || 'Untitled Post',
-                  nodeType: 'post' as const,
-                  icon: 'pi pi-fw pi-file',
-                  subjectId: node.id,
-                  parentNodeId: node.id,
-                  parentNodeType: 'subject' as const,
-                  scope: node.scope,
-                  organizationId: options.organizationId || null,
-                  treeContextType: options.treeContextType,
-                  treeContextKey: options.treeContextKey,
-                  pathIds,
-                  to: resolveTreePath(`${node.url}/post/${encodeURIComponent(post.id)}`),
-                  url: options.toPostChatUrl?.(node, post)
-              }))
-            : [];
-
-        return {
-            id: node.id,
-            label: node.name,
-            nodeType: node.nodeType,
-            icon: resolveIcon(node.nodeType),
-            loading: loadingNodeIds.has(node.id),
-            canLazyLoadChildren: options.canLazyLoadChildren?.(node) || false,
-            parentNodeId: parent?.id,
-            parentNodeType: parent?.nodeType,
-            scope: node.scope,
-            organizationId: options.organizationId || null,
-            treeContextType: options.treeContextType,
-            treeContextKey: options.treeContextKey,
-            pathIds,
-            to: resolveTreePath(node.url),
-            url: options.toChatUrl?.(node),
-            items: [...children, ...posts]
-        };
+const readRangeItems = <T extends TreeNodeRecord>(
+  items: TreeNodeModel<T>[],
+  node: T,
+  contextKey: string,
+  maxVisibleChildren: number
+): TreeNodeModel<T>[] => {
+  if (items.length <= maxVisibleChildren) return items;
+  const visible = items.slice(0, maxVisibleChildren);
+  for (
+    let start = maxVisibleChildren;
+    start < items.length;
+    start += maxVisibleChildren
+  ) {
+    const slice = items.slice(start, start + maxVisibleChildren);
+    visible.push({
+      id: `${node.id}__range__${start}`,
+      label: `[${start}-${start + slice.length - 1}]`,
+      kind: "range",
+      itemType: "range",
+      icon: "pi pi-fw pi-list",
+      checked: false,
+      contextKey,
+      parentId: node.id,
+      pathIds: node.pathIds,
+      properties: { sourceId: node.id, start, end: start + slice.length - 1 },
+      state: { load: "loading-done", expand: "collapsed" },
+      contextState: { visible: true },
+      editable: false,
+      locked: true,
+      visible: true,
+      showCheckbox: false,
+      canLazyLoadChildren: false,
+      children: slice,
+      record: null,
+      rangeStart: start,
+      rangeEnd: start + slice.length - 1,
     });
+  }
+  return visible;
+};
+
+export const buildTreeNodeModels = <T extends TreeNodeRecord>(
+  nodes: T[],
+  options: BuildTreeNodeModelOptions<T>
+): TreeNodeModel<T>[] => {
+  const query = (options.filterQuery || "").trim().toLowerCase();
+  const maxVisibleChildren = options.maxVisibleChildren || 50;
+  const loadingNodeIds = options.loadingNodeIds || new Set<string>();
+
+  return nodes
+    .slice()
+    .sort((left, right) => left.label.localeCompare(right.label))
+    .reduce<TreeNodeModel<T>[]>((result, node) => {
+      const children = buildTreeNodeModels(node.children as T[], options);
+      const visibleChildren = readRangeItems(
+        children,
+        node,
+        options.contextKey,
+        maxVisibleChildren
+      );
+      if (
+        !matchesNode(node, query, options.matchNode) &&
+        !visibleChildren.length
+      )
+        return result;
+      result.push({
+        id: node.id,
+        label: node.label,
+        kind: node.kind,
+        itemType: "node",
+        icon: options.readIcon ? options.readIcon(node) : node.icon,
+        to: options.readNavigationUrl
+          ? options.readNavigationUrl(node, options.contextKey)
+          : node.to,
+        url: options.readActionUrl
+          ? options.readActionUrl(node, options.contextKey)
+          : node.url,
+        loading: loadingNodeIds.has(node.id),
+        checked: node.contextState.checked === true,
+        contextKey: options.contextKey,
+        parentId: node.parentId,
+        pathIds: node.pathIds,
+        properties: node.properties,
+        state: {
+          load: node.state.load,
+          expand:
+            visibleChildren.length > maxVisibleChildren
+              ? "partial"
+              : node.state.expand,
+        },
+        contextState: node.contextState,
+        editable: node.editable,
+        locked: node.locked,
+        visible: node.visible,
+        showCheckbox: node.showCheckbox,
+        canLazyLoadChildren: options.canLazyLoadChildren
+          ? options.canLazyLoadChildren(node)
+          : false,
+        children: visibleChildren,
+        record: node,
+      });
+      return result;
+    }, []);
 };

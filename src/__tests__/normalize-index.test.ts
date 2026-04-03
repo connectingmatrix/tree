@@ -1,55 +1,46 @@
-import { describe, expect, it } from 'vitest';
-import { buildTreeIndex, normalizeTreeNodes, scopedIdKey } from '../normalize';
+import { describe, expect, it } from "vitest";
+import {
+  buildTreeIndex,
+  normalizeTreeNodes,
+  readTreeNodeKey,
+} from "../normalize";
+import { TreeNodeRecord } from "../types";
 
-describe('normalizeTreeNodes + buildTreeIndex', () => {
-    it('normalizes raw tree nodes and indexes by scoped id/path', () => {
-        const userRoots = normalizeTreeNodes({
-            scope: 'u',
-            rawNodes: [
-                {
-                    id: 'ch-1',
-                    nodeType: 'CHANNEL',
-                    name: 'Root Channel',
-                    slug: 'root-channel',
-                    children: [
-                        {
-                            id: 'cat-1',
-                            nodeType: 'CATEGORY',
-                            name: 'Category',
-                            slug: 'category',
-                            children: [
-                                {
-                                    id: 'sub-1',
-                                    nodeType: 'SUBJECT',
-                                    name: 'Subject',
-                                    slug: 'subject',
-                                    posts: [
-                                        {
-                                            id: 'post-1',
-                                            subject_id: 'sub-1',
-                                            title: 'P1',
-                                            narrative: null,
-                                            metadata: {},
-                                            created_at: null,
-                                            updated_at: null
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        });
+const createNode = (
+  id: string,
+  kind: string,
+  children: TreeNodeRecord[] = []
+): TreeNodeRecord => ({
+  id,
+  kind,
+  label: id,
+  parentId: null,
+  depth: 0,
+  pathIds: [],
+  children,
+  childCount: children.length,
+  properties: { id },
+  state: {
+    load: "loading-done",
+    expand: children.length ? "collapsed" : "expanded",
+  },
+  contextState: { visible: true },
+  editable: true,
+  locked: false,
+  visible: true,
+  showCheckbox: false,
+});
 
-        const index = buildTreeIndex({
-            u: userRoots,
-            g: []
-        });
-
-        expect(userRoots).toHaveLength(1);
-        expect(index.nodeByScopedId.get(scopedIdKey('u', 'ch-1'))?.name).toBe('Root Channel');
-        expect(index.subjectNodeByScopedId.get(scopedIdKey('u', 'sub-1'))?.posts).toHaveLength(1);
-        expect(index.nodeByScopedPath.has('u:channel/root-channel/category/category/subject/subject')).toBe(true);
-    });
+describe("normalizeTreeNodes + buildTreeIndex", () => {
+  it("normalizes nested nodes and indexes them by context", () => {
+    const roots = normalizeTreeNodes([
+      createNode("root", "folder", [createNode("child", "leaf")]),
+    ]);
+    const index = buildTreeIndex({ user: roots });
+    expect(roots[0]?.pathIds).toEqual(["root"]);
+    expect(roots[0]?.children[0]?.pathIds).toEqual(["root", "child"]);
+    expect(
+      index.nodeByContextId.get(readTreeNodeKey("user", "child"))?.label
+    ).toBe("child");
+  });
 });

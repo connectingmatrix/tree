@@ -1,144 +1,189 @@
-import { applyTreePatchOperations } from './reducer';
-import { TreeController, TreeControllerState, TreePatchOperation, TreeNode } from './types';
+import {
+  applyTreePatchOperations,
+  findNodeById,
+  findTreeChild,
+  findTreeParent,
+} from "./reducer";
+import {
+  TreeChange,
+  TreeController,
+  TreeControllerState,
+  TreeMatch,
+  TreeNodeRecord,
+  TreeSelection,
+} from "./types";
 
-const createInitialState = (): TreeControllerState => ({
-    rootsByContext: {},
-    loadingByContext: {},
-    loadingNodeIdsByContext: {},
-    expandedKeyByContext: {}
+const createState = <T extends TreeNodeRecord>(): TreeControllerState<T> => ({
+  rootsByContext: {},
+  expandedKeysByContext: {},
+  selectedByContext: {},
+  filterByContext: {},
+  loadingContextKeys: {},
+  loadingNodeIdsByContext: {},
 });
 
-const cloneState = (state: TreeControllerState): TreeControllerState => {
-    const clonedLoadingNodeIdsByContext: Record<string, Set<string>> = {};
-
-    Object.entries(state.loadingNodeIdsByContext).forEach(([key, value]) => {
-        clonedLoadingNodeIdsByContext[key] = new Set<string>(value);
-    });
-
-    return {
-        rootsByContext: {
-            ...state.rootsByContext
-        },
-        loadingByContext: {
-            ...state.loadingByContext
-        },
-        loadingNodeIdsByContext: clonedLoadingNodeIdsByContext,
-        expandedKeyByContext: {
-            ...state.expandedKeyByContext
-        }
-    };
+const copyState = <T extends TreeNodeRecord>(
+  state: TreeControllerState<T>
+): TreeControllerState<T> => {
+  const loadingNodeIdsByContext: Record<string, Set<string>> = {};
+  Object.entries(state.loadingNodeIdsByContext).forEach(([key, value]) => {
+    loadingNodeIdsByContext[key] = new Set<string>(value);
+  });
+  return {
+    ...state,
+    rootsByContext: { ...state.rootsByContext },
+    expandedKeysByContext: { ...state.expandedKeysByContext },
+    selectedByContext: { ...state.selectedByContext },
+    filterByContext: { ...state.filterByContext },
+    loadingContextKeys: { ...state.loadingContextKeys },
+    loadingNodeIdsByContext,
+  };
 };
 
-export const createTreeController = (seedState?: Partial<TreeControllerState>): TreeController => {
-    let state: TreeControllerState = {
-        ...createInitialState(),
-        ...(seedState || {})
-    };
+const writeExpanded = (
+  state: TreeControllerState<TreeNodeRecord>,
+  contextKey: string,
+  nodeId: string,
+  open: boolean
+): TreeControllerState<TreeNodeRecord> => {
+  const current = state.expandedKeysByContext[contextKey] || [];
+  const next = open
+    ? [...new Set([...current, nodeId])]
+    : current.filter((entry) => entry !== nodeId);
+  return {
+    ...state,
+    expandedKeysByContext: {
+      ...state.expandedKeysByContext,
+      [contextKey]: next,
+    },
+  };
+};
 
-    const listeners = new Set<(nextState: TreeControllerState) => void>();
+export const createTreeController = <T extends TreeNodeRecord>(
+  seedState?: Partial<TreeControllerState<T>>
+): TreeController<T> => {
+  let state = {
+    ...createState<T>(),
+    ...(seedState || {}),
+  } as TreeControllerState<T>;
+  const listeners = new Set<(state: TreeControllerState<T>) => void>();
+  const notify = (): void =>
+    listeners.forEach((listener) => listener(copyState(state)));
+  const readRoots = (contextKey: string): T[] =>
+    state.rootsByContext[contextKey] || [];
+  const writeSelection = (
+    contextKey: string,
+    selection: TreeSelection | null
+  ): void => {
+    const selectedByContext = { ...state.selectedByContext };
+    if (selection) selectedByContext[contextKey] = selection;
+    if (!selection) delete selectedByContext[contextKey];
+    state = { ...state, selectedByContext };
+  };
 
-    const notify = (): void => {
-        const snapshot = cloneState(state);
-        listeners.forEach((listener) => listener(snapshot));
-    };
-
-    return {
-        getState: (): TreeControllerState => cloneState(state),
-        subscribe: (listener): (() => void) => {
-            listeners.add(listener);
-            return () => {
-                listeners.delete(listener);
-            };
+  return {
+    getState: () => copyState(state),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    setRoots: (contextKey, roots) => {
+      state = {
+        ...state,
+        rootsByContext: { ...state.rootsByContext, [contextKey]: roots },
+      };
+      notify();
+    },
+    applyChanges: (contextKey, changes) => {
+      const list = Array.isArray(changes) ? changes : [changes];
+      state = {
+        ...state,
+        rootsByContext: {
+          ...state.rootsByContext,
+          [contextKey]: applyTreePatchOperations(
+            readRoots(contextKey),
+            list as TreeChange<T>[]
+          ),
         },
-        setRoots: (contextKey: string, roots: TreeNode[]): void => {
-            state = {
-                ...state,
-                rootsByContext: {
-                    ...state.rootsByContext,
-                    [contextKey]: roots
-                }
-            };
-
-            notify();
-        },
-        applyPatch: (contextKey: string, operation: TreePatchOperation | TreePatchOperation[]): void => {
-            const operations = Array.isArray(operation) ? operation : [operation];
-            if (!operations.length) {
-                return;
-            }
-
-            const currentRoots = state.rootsByContext[contextKey] || [];
-            const nextRoots = applyTreePatchOperations(currentRoots, operations);
-            state = {
-                ...state,
-                rootsByContext: {
-                    ...state.rootsByContext,
-                    [contextKey]: nextRoots
-                }
-            };
-
-            notify();
-        },
-        setContextLoading: (contextKey: string, loading: boolean): void => {
-            const nextLoadingByContext = {
-                ...state.loadingByContext
-            };
-
-            if (loading) {
-                nextLoadingByContext[contextKey] = true;
-            } else {
-                delete nextLoadingByContext[contextKey];
-            }
-
-            state = {
-                ...state,
-                loadingByContext: nextLoadingByContext
-            };
-
-            notify();
-        },
-        setNodeLoading: (contextKey: string, nodeIds: Array<string | null | undefined>, loading: boolean): void => {
-            const normalizedIds = nodeIds.map((entry) => (entry || '').trim()).filter((entry): entry is string => Boolean(entry));
-            if (!normalizedIds.length) {
-                return;
-            }
-
-            const currentSet = new Set<string>(state.loadingNodeIdsByContext[contextKey] || []);
-            normalizedIds.forEach((id) => {
-                if (loading) {
-                    currentSet.add(id);
-                } else {
-                    currentSet.delete(id);
-                }
-            });
-
-            const nextLoadingNodeIdsByContext = {
-                ...state.loadingNodeIdsByContext
-            };
-
-            if (currentSet.size > 0) {
-                nextLoadingNodeIdsByContext[contextKey] = currentSet;
-            } else {
-                delete nextLoadingNodeIdsByContext[contextKey];
-            }
-
-            state = {
-                ...state,
-                loadingNodeIdsByContext: nextLoadingNodeIdsByContext
-            };
-
-            notify();
-        },
-        setExpandedKey: (contextKey: string, key: string): void => {
-            state = {
-                ...state,
-                expandedKeyByContext: {
-                    ...state.expandedKeyByContext,
-                    [contextKey]: key
-                }
-            };
-
-            notify();
-        }
-    };
+      };
+      notify();
+    },
+    setContextLoading: (contextKey, loading) => {
+      state = {
+        ...state,
+        loadingContextKeys: loading
+          ? { ...state.loadingContextKeys, [contextKey]: true }
+          : Object.fromEntries(
+              Object.entries(state.loadingContextKeys).filter(
+                ([key]) => key !== contextKey
+              )
+            ),
+      };
+      notify();
+    },
+    setNodeLoading: (contextKey, nodeIds, loading) => {
+      const next = new Set<string>(
+        state.loadingNodeIdsByContext[contextKey] || []
+      );
+      nodeIds
+        .filter(Boolean)
+        .forEach((nodeId) =>
+          loading ? next.add(nodeId) : next.delete(nodeId)
+        );
+      state = {
+        ...state,
+        loadingNodeIdsByContext: next.size
+          ? { ...state.loadingNodeIdsByContext, [contextKey]: next }
+          : Object.fromEntries(
+              Object.entries(state.loadingNodeIdsByContext).filter(
+                ([key]) => key !== contextKey
+              )
+            ),
+      };
+      notify();
+    },
+    setSelected: (contextKey, selection) => {
+      writeSelection(contextKey, selection);
+      notify();
+    },
+    expand: (contextKey, nodeId) => {
+      state = writeExpanded(
+        state as TreeControllerState<TreeNodeRecord>,
+        contextKey,
+        nodeId,
+        true
+      ) as TreeControllerState<T>;
+      notify();
+    },
+    collapse: (contextKey, nodeId) => {
+      state = writeExpanded(
+        state as TreeControllerState<TreeNodeRecord>,
+        contextKey,
+        nodeId,
+        false
+      ) as TreeControllerState<T>;
+      notify();
+    },
+    setFilter: (contextKey, value) => {
+      state = {
+        ...state,
+        filterByContext: { ...state.filterByContext, [contextKey]: value },
+      };
+      notify();
+    },
+    getParent: (contextKey, nodeId) => {
+      const node = findNodeById(readRoots(contextKey), nodeId);
+      return node && node.parentId
+        ? findNodeById(readRoots(contextKey), node.parentId)
+        : null;
+    },
+    getChildren: (contextKey, nodeId) =>
+      nodeId
+        ? (findNodeById(readRoots(contextKey), nodeId)?.children as T[]) || []
+        : readRoots(contextKey),
+    findParent: (contextKey, nodeId, match) =>
+      findTreeParent(readRoots(contextKey), nodeId, match as TreeMatch<T>),
+    findChild: (contextKey, nodeId, match) =>
+      findTreeChild(readRoots(contextKey), nodeId, match as TreeMatch<T>),
+  };
 };
